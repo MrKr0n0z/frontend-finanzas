@@ -3,27 +3,125 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { getCookie, deleteCookie } from 'cookies-next';
-import { financesService } from '@/services/finances';
-import type { Account, Transaction } from '@/types';
+import { 
+  TrendingUp, 
+  TrendingDown, 
+  Wallet, 
+  CreditCard,
+  DollarSign,
+  LogOut,
+  Activity,
+  Calendar
+} from 'lucide-react';
+import { 
+  BarChart, 
+  Bar, 
+  XAxis, 
+  YAxis, 
+  CartesianGrid, 
+  Tooltip, 
+  Legend, 
+  ResponsiveContainer 
+} from 'recharts';
+import axiosInstance from '@/lib/axios';
+import type { Account, Transaction, Category } from '@/types';
+
+// ============================================
+// INTERFACES
+// ============================================
+
+interface MonthlyData {
+  month: string;
+  ingresos: number;
+  gastos: number;
+}
+
+// ============================================
+// COMPONENTE PRINCIPAL
+// ============================================
 
 export default function DashboardPage() {
   const router = useRouter();
+  
+  // Estados
   const [loading, setLoading] = useState(true);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
-  // Cálculos financieros
-  const totalLiquidez = accounts
-    ?.filter(account => account.type === 'LIQUID')
-    .reduce((sum, account) => sum + account.current_balance, 0) || 0;
+  // ============================================
+  // CÁLCULOS DE KPIs
+  // ============================================
 
-  const totalDeuda = accounts
-    ?.filter(account => account.type === 'CREDIT')
-    .reduce((sum, account) => sum + account.current_balance, 0) || 0;
+  // Saldo Total (Patrimonio Neto Real)
+  const totalBalance = accounts.reduce((sum, account) => {
+    return sum + account.current_balance;
+  }, 0);
 
-  const patrimonio = totalLiquidez + totalDeuda;
+  // Obtener mes y año actual
+  const currentDate = new Date();
+  const currentMonth = currentDate.getMonth();
+  const currentYear = currentDate.getFullYear();
 
-  // Formatear moneda
+  // Filtrar transacciones del mes actual
+  const currentMonthTransactions = transactions.filter(transaction => {
+    const transactionDate = new Date(transaction.date);
+    return transactionDate.getMonth() === currentMonth && 
+           transactionDate.getFullYear() === currentYear;
+  });
+
+  // Ingresos del mes
+  const monthlyIncome = currentMonthTransactions
+    .filter(t => t.type === 'INCOME')
+    .reduce((sum, t) => sum + t.amount, 0);
+
+  // Gastos del mes
+  const monthlyExpenses = currentMonthTransactions
+    .filter(t => t.type === 'EXPENSE')
+    .reduce((sum, t) => sum + Math.abs(t.amount), 0);
+
+  // ============================================
+  // DATOS PARA GRÁFICO (Últimos 6 meses)
+  // ============================================
+
+  const getMonthlyChartData = (): MonthlyData[] => {
+    const monthNames = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+    const data: MonthlyData[] = [];
+
+    for (let i = 5; i >= 0; i--) {
+      const date = new Date(currentYear, currentMonth - i, 1);
+      const month = date.getMonth();
+      const year = date.getFullYear();
+
+      const monthTransactions = transactions.filter(t => {
+        const tDate = new Date(t.date);
+        return tDate.getMonth() === month && tDate.getFullYear() === year;
+      });
+
+      const ingresos = monthTransactions
+        .filter(t => t.type === 'INCOME')
+        .reduce((sum, t) => sum + t.amount, 0);
+
+      const gastos = monthTransactions
+        .filter(t => t.type === 'EXPENSE')
+        .reduce((sum, t) => sum + Math.abs(t.amount), 0);
+
+      data.push({
+        month: monthNames[month],
+        ingresos,
+        gastos
+      });
+    }
+
+    return data;
+  };
+
+  const chartData = getMonthlyChartData();
+
+  // ============================================
+  // FORMATTERS
+  // ============================================
+
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('es-MX', {
       style: 'currency',
@@ -31,7 +129,6 @@ export default function DashboardPage() {
     }).format(amount);
   };
 
-  // Formatear fecha
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString('es-MX', {
       day: '2-digit',
@@ -40,7 +137,10 @@ export default function DashboardPage() {
     });
   };
 
-  // Verificar autenticación y cargar datos
+  // ============================================
+  // EFECTOS Y CARGA DE DATOS
+  // ============================================
+
   useEffect(() => {
     const token = getCookie('auth_token');
 
@@ -51,22 +151,27 @@ export default function DashboardPage() {
 
     const loadData = async () => {
       try {
-        // Cargar cuentas
-        try {
-          const accountsData = await financesService.getAccounts();
-          setAccounts(accountsData);
-        } catch (error) {
-          console.error('Error al cargar cuentas:', error);
-          setAccounts([]);
-        }
+        setLoading(true);
+        setError(null);
 
-        // Cargar transacciones
-        try {
-          const transactionsData = await financesService.getTransactions({ per_page: 10 });
-          setTransactions(transactionsData);
-        } catch (error) {
-          console.error('Error al cargar transacciones:', error);
-          setTransactions([]);
+        // Cargar datos simultáneamente con Promise.all
+        const [accountsResponse, transactionsResponse] = await Promise.all([
+          axiosInstance.get<{ data: Account[] }>('/accounts'),
+          axiosInstance.get<{ data: Transaction[] }>('/transactions', {
+            params: { per_page: 50 } // Traer más para el gráfico
+          })
+        ]);
+
+        setAccounts(accountsResponse.data.data || []);
+        setTransactions(transactionsResponse.data.data || []);
+      } catch (err: any) {
+        console.error('Error al cargar datos:', err);
+        setError('Error al cargar los datos del dashboard');
+        
+        // Si es error 401, redirigir al login
+        if (err.response?.status === 401) {
+          deleteCookie('auth_token');
+          router.push('/');
         }
       } finally {
         setLoading(false);
@@ -76,285 +181,364 @@ export default function DashboardPage() {
     loadData();
   }, [router]);
 
-  // Cerrar sesión
+  // ============================================
+  // HANDLERS
+  // ============================================
+
   const handleLogout = () => {
     deleteCookie('auth_token');
     router.push('/');
   };
 
+  // ============================================
+  // LOADING STATE
+  // ============================================
+
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-gray-50">
+      <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-gray-50 to-gray-100">
         <div className="text-center">
-          <svg
-            className="mx-auto h-12 w-12 animate-spin text-indigo-600"
-            xmlns="http://www.w3.org/2000/svg"
-            fill="none"
-            viewBox="0 0 24 24"
-          >
-            <circle
-              className="opacity-25"
-              cx="12"
-              cy="12"
-              r="10"
-              stroke="currentColor"
-              strokeWidth="4"
-            />
-            <path
-              className="opacity-75"
-              fill="currentColor"
-              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-            />
-          </svg>
-          <p className="mt-4 text-lg font-medium text-gray-700">Cargando...</p>
+          <div className="mx-auto h-16 w-16 animate-spin rounded-full border-4 border-gray-200 border-t-indigo-600"></div>
+          <p className="mt-4 text-lg font-medium text-gray-700">Cargando dashboard...</p>
         </div>
       </div>
     );
   }
 
+  // ============================================
+  // ERROR STATE
+  // ============================================
+
+  if (error) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-gray-50">
+        <div className="rounded-lg bg-white p-8 shadow-lg">
+          <p className="text-red-600">{error}</p>
+          <button
+            onClick={() => window.location.reload()}
+            className="mt-4 rounded-lg bg-indigo-600 px-4 py-2 text-white hover:bg-indigo-700"
+          >
+            Reintentar
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ============================================
+  // RENDER PRINCIPAL
+  // ============================================
+
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="bg-white shadow">
-        <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
+      {/* ============================================
+          HEADER
+          ============================================ */}
+      <header className="border-b border-gray-200 bg-white shadow-sm">
+        <div className="mx-auto max-w-7xl px-4 py-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between">
-            <h1 className="text-3xl font-bold text-gray-900">Mis Finanzas</h1>
+            <div className="flex items-center space-x-3">
+              <div className="rounded-lg bg-indigo-600 p-2">
+                <Wallet className="h-6 w-6 text-white" />
+              </div>
+              <div>
+                <h1 className="text-2xl font-bold text-gray-900">Dashboard Financiero</h1>
+                <p className="text-sm text-gray-500">Gestiona tus finanzas personales</p>
+              </div>
+            </div>
             <button
               onClick={handleLogout}
-              className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
+              className="flex items-center space-x-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white transition-all hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
             >
-              Cerrar Sesión
+              <LogOut className="h-4 w-4" />
+              <span>Cerrar Sesión</span>
             </button>
           </div>
         </div>
       </header>
 
       <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-        {/* Resumen Financiero - Grid de 3 Tarjetas */}
+        {/* ============================================
+            SECCIÓN SUPERIOR - KPIs (3 Tarjetas)
+            ============================================ */}
         <div className="grid gap-6 md:grid-cols-3">
-          {/* Tarjeta Verde - Liquidez */}
-          <div className="rounded-xl bg-white p-6 shadow-md ring-1 ring-gray-200">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-gray-600">
-                  Liquidez Disponible
+          {/* Tarjeta 1: Saldo Total */}
+          <div className="group rounded-2xl bg-gradient-to-br from-indigo-500 to-indigo-600 p-6 shadow-lg transition-all hover:shadow-xl">
+            <div className="flex items-start justify-between">
+              <div className="flex-1">
+                <p className="text-sm font-medium text-indigo-100">Saldo Total</p>
+                <p className="mt-2 text-3xl font-bold text-white">
+                  {formatCurrency(totalBalance)}
                 </p>
-                <p className="mt-2 text-3xl font-bold text-green-600">
-                  {formatCurrency(totalLiquidez)}
+                <p className="mt-2 text-xs text-indigo-200">
+                  Patrimonio neto real
                 </p>
               </div>
-              <div className="rounded-full bg-green-100 p-3">
-                <svg
-                  className="h-8 w-8 text-green-600"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                  />
-                </svg>
+              <div className="rounded-full bg-white/20 p-3">
+                <DollarSign className="h-7 w-7 text-white" />
               </div>
             </div>
           </div>
 
-          {/* Tarjeta Roja - Deuda */}
-          <div className="rounded-xl bg-white p-6 shadow-md ring-1 ring-gray-200">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-gray-600">Deuda Total</p>
-                <p className="mt-2 text-3xl font-bold text-red-600">
-                  {formatCurrency(totalDeuda)}
+          {/* Tarjeta 2: Ingresos del Mes */}
+          <div className="group rounded-2xl bg-gradient-to-br from-green-500 to-green-600 p-6 shadow-lg transition-all hover:shadow-xl">
+            <div className="flex items-start justify-between">
+              <div className="flex-1">
+                <p className="text-sm font-medium text-green-100">Ingresos del Mes</p>
+                <p className="mt-2 text-3xl font-bold text-white">
+                  {formatCurrency(monthlyIncome)}
+                </p>
+                <p className="mt-2 flex items-center text-xs text-green-200">
+                  <Calendar className="mr-1 h-3 w-3" />
+                  {new Date().toLocaleDateString('es-MX', { month: 'long', year: 'numeric' })}
                 </p>
               </div>
-              <div className="rounded-full bg-red-100 p-3">
-                <svg
-                  className="h-8 w-8 text-red-600"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"
-                  />
-                </svg>
+              <div className="rounded-full bg-white/20 p-3">
+                <TrendingUp className="h-7 w-7 text-white" />
               </div>
             </div>
           </div>
 
-          {/* Tarjeta Azul/Índigo - Patrimonio */}
-          <div className="rounded-xl bg-white p-6 shadow-md ring-1 ring-gray-200">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-gray-600">
-                  Patrimonio Neto
+          {/* Tarjeta 3: Gastos del Mes */}
+          <div className="group rounded-2xl bg-gradient-to-br from-red-500 to-red-600 p-6 shadow-lg transition-all hover:shadow-xl">
+            <div className="flex items-start justify-between">
+              <div className="flex-1">
+                <p className="text-sm font-medium text-red-100">Gastos del Mes</p>
+                <p className="mt-2 text-3xl font-bold text-white">
+                  {formatCurrency(monthlyExpenses)}
                 </p>
-                <p className={`mt-2 text-3xl font-bold ${
-                  patrimonio >= 0 ? 'text-indigo-600' : 'text-orange-600'
-                }`}>
-                  {formatCurrency(patrimonio)}
+                <p className="mt-2 flex items-center text-xs text-red-200">
+                  <Activity className="mr-1 h-3 w-3" />
+                  Balance: {formatCurrency(monthlyIncome - monthlyExpenses)}
                 </p>
               </div>
-              <div className="rounded-full bg-indigo-100 p-3">
-                <svg
-                  className="h-8 w-8 text-indigo-600"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
-                  />
-                </svg>
+              <div className="rounded-full bg-white/20 p-3">
+                <TrendingDown className="h-7 w-7 text-white" />
               </div>
             </div>
           </div>
         </div>
 
-        {/* Movimientos Recientes */}
+        {/* ============================================
+            SECCIÓN MEDIA - GRÁFICO
+            ============================================ */}
         <div className="mt-8">
-          <div className="rounded-xl bg-white shadow-md">
-            <div className="border-b border-gray-200 px-6 py-4">
-              <h2 className="text-xl font-bold text-gray-900">
-                Movimientos Recientes
-              </h2>
-            </div>
-
-            {!transactions || transactions.length === 0 ? (
-              <div className="px-6 py-12 text-center">
-                <svg
-                  className="mx-auto h-12 w-12 text-gray-400"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"
-                  />
-                </svg>
-                <p className="mt-2 text-sm text-gray-500">
-                  No hay transacciones registradas
-                </p>
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="min-w-full divide-y divide-gray-200">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                        Fecha
-                      </th>
-                      <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                        Descripción
-                      </th>
-                      <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                        Categoría
-                      </th>
-                      <th className="px-6 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500">
-                        Monto
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-200 bg-white">
-                    {transactions.slice(0, 5).map((transaction) => (
-                      <tr
-                        key={transaction.id}
-                        className="transition-colors hover:bg-gray-50"
-                      >
-                        <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-900">
-                          {formatDate(transaction.date)}
-                        </td>
-                        <td className="px-6 py-4 text-sm text-gray-900">
-                          {transaction.description}
-                        </td>
-                        <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">
-                          {transaction.category?.name || 'Sin categoría'}
-                        </td>
-                        <td
-                          className={`whitespace-nowrap px-6 py-4 text-right text-sm font-semibold ${
-                            transaction.type === 'EXPENSE'
-                              ? 'text-red-600'
-                              : transaction.type === 'INCOME'
-                              ? 'text-green-600'
-                              : 'text-gray-900'
-                          }`}
-                        >
-                          {transaction.type === 'EXPENSE' ? '-' : '+'}
-                          {formatCurrency(Math.abs(transaction.amount))}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Resumen de Cuentas */}
-        <div className="mt-8">
-          <div className="rounded-xl bg-white shadow-md">
-            <div className="border-b border-gray-200 px-6 py-4">
-              <h2 className="text-xl font-bold text-gray-900">Mis Cuentas</h2>
-            </div>
-
-            {accounts.length === 0 ? (
-              <div className="px-6 py-12 text-center">
+          <div className="rounded-2xl bg-white p-6 shadow-lg">
+            <div className="mb-6 flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-bold text-gray-900">
+                  Flujo de Efectivo - Últimos 6 Meses
+                </h2>
                 <p className="text-sm text-gray-500">
-                  No hay cuentas registradas
+                  Comparación de ingresos vs gastos mensuales
                 </p>
               </div>
-            ) : (
-              <div className="grid gap-4 p-6 sm:grid-cols-2 lg:grid-cols-3">
-                {accounts.map((account) => (
-                  <div
-                    key={account.id}
-                    className="rounded-lg border border-gray-200 p-4 transition-shadow hover:shadow-md"
-                  >
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1">
-                        <p className="text-sm font-medium text-gray-900">
-                          {account.name}
-                        </p>
-                        <p className="mt-1 text-xs text-gray-500">
-                          {account.type === 'LIQUID' ? 'Líquida' : 'Crédito'}
+            </div>
+
+            <div className="h-80">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={chartData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                  <XAxis 
+                    dataKey="month" 
+                    stroke="#6b7280"
+                    style={{ fontSize: '12px' }}
+                  />
+                  <YAxis 
+                    stroke="#6b7280"
+                    style={{ fontSize: '12px' }}
+                    tickFormatter={(value) => `$${(value / 1000).toFixed(0)}k`}
+                  />
+                  <Tooltip 
+                    formatter={(value) => value ? formatCurrency(Number(value)) : '$0.00'}
+                    contentStyle={{
+                      backgroundColor: '#fff',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '8px',
+                      boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
+                    }}
+                  />
+                  <Legend 
+                    wrapperStyle={{ paddingTop: '20px' }}
+                    iconType="circle"
+                  />
+                  <Bar 
+                    dataKey="ingresos" 
+                    fill="#10b981" 
+                    radius={[8, 8, 0, 0]}
+                    name="Ingresos"
+                  />
+                  <Bar 
+                    dataKey="gastos" 
+                    fill="#ef4444" 
+                    radius={[8, 8, 0, 0]}
+                    name="Gastos"
+                  />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        </div>
+
+        {/* ============================================
+            SECCIÓN INFERIOR - 2 COLUMNAS
+            ============================================ */}
+        <div className="mt-8 grid gap-6 lg:grid-cols-3">
+          {/* Columna Izquierda: Lista de Cuentas */}
+          <div className="lg:col-span-1">
+            <div className="rounded-2xl bg-white p-6 shadow-lg">
+              <div className="mb-4 flex items-center justify-between">
+                <h2 className="text-lg font-bold text-gray-900">Mis Cuentas</h2>
+                <span className="rounded-full bg-indigo-100 px-3 py-1 text-xs font-semibold text-indigo-700">
+                  {accounts.length}
+                </span>
+              </div>
+
+              {accounts.length === 0 ? (
+                <div className="py-8 text-center">
+                  <CreditCard className="mx-auto h-12 w-12 text-gray-300" />
+                  <p className="mt-2 text-sm text-gray-500">No hay cuentas</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {accounts.map((account) => (
+                    <div
+                      key={account.id}
+                      className="group rounded-lg border border-gray-200 bg-gray-50 p-4 transition-all hover:border-indigo-300 hover:bg-indigo-50"
+                    >
+                      <div className="flex items-start justify-between">
+                        <div className="flex items-center space-x-3">
+                          <div className={`rounded-lg p-2 ${
+                            account.type === 'LIQUID' 
+                              ? 'bg-green-100' 
+                              : 'bg-red-100'
+                          }`}>
+                            {account.type === 'LIQUID' ? (
+                              <Wallet className={`h-5 w-5 ${
+                                account.type === 'LIQUID' 
+                                  ? 'text-green-600' 
+                                  : 'text-red-600'
+                              }`} />
+                            ) : (
+                              <CreditCard className="h-5 w-5 text-red-600" />
+                            )}
+                          </div>
+                          <div>
+                            <p className="font-semibold text-gray-900">
+                              {account.name}
+                            </p>
+                            <p className="text-xs text-gray-500">
+                              {account.type === 'LIQUID' ? 'Cuenta Líquida' : 'Tarjeta de Crédito'}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="mt-3">
+                        <p className={`text-right text-lg font-bold ${
+                          account.current_balance >= 0 
+                            ? 'text-gray-900' 
+                            : 'text-red-600'
+                        }`}>
+                          {formatCurrency(account.current_balance)}
                         </p>
                       </div>
-                      <span
-                        className={`rounded-full px-2 py-1 text-xs font-medium ${
-                          account.type === 'LIQUID'
-                            ? 'bg-green-100 text-green-800'
-                            : 'bg-red-100 text-red-800'
-                        }`}
-                      >
-                        {account.type}
-                      </span>
                     </div>
-                    <p
-                      className={`mt-3 text-lg font-bold ${
-                        account.current_balance >= 0
-                          ? 'text-gray-900'
-                          : 'text-red-600'
-                      }`}
-                    >
-                      {formatCurrency(account.current_balance)}
-                    </p>
-                  </div>
-                ))}
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Columna Derecha: Tabla de Últimas Transacciones */}
+          <div className="lg:col-span-2">
+            <div className="rounded-2xl bg-white p-6 shadow-lg">
+              <div className="mb-4 flex items-center justify-between">
+                <h2 className="text-lg font-bold text-gray-900">Últimas Transacciones</h2>
+                <span className="rounded-full bg-indigo-100 px-3 py-1 text-xs font-semibold text-indigo-700">
+                  {transactions.slice(0, 10).length} recientes
+                </span>
               </div>
-            )}
+
+              {transactions.length === 0 ? (
+                <div className="py-12 text-center">
+                  <Activity className="mx-auto h-12 w-12 text-gray-300" />
+                  <p className="mt-2 text-sm text-gray-500">No hay transacciones</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full">
+                    <thead>
+                      <tr className="border-b border-gray-200">
+                        <th className="pb-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">
+                          Fecha
+                        </th>
+                        <th className="pb-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">
+                          Descripción
+                        </th>
+                        <th className="pb-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">
+                          Cuenta
+                        </th>
+                        <th className="pb-3 text-right text-xs font-semibold uppercase tracking-wider text-gray-500">
+                          Monto
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {transactions.slice(0, 10).map((transaction) => (
+                        <tr
+                          key={transaction.id}
+                          className="group transition-colors hover:bg-gray-50"
+                        >
+                          <td className="py-4 text-sm text-gray-600">
+                            {formatDate(transaction.date)}
+                          </td>
+                          <td className="py-4">
+                            <div className="flex items-center space-x-3">
+                              <div className={`rounded-lg p-2 ${
+                                transaction.type === 'INCOME' 
+                                  ? 'bg-green-100' 
+                                  : transaction.type === 'EXPENSE'
+                                  ? 'bg-red-100'
+                                  : 'bg-blue-100'
+                              }`}>
+                                {transaction.type === 'INCOME' ? (
+                                  <TrendingUp className="h-4 w-4 text-green-600" />
+                                ) : transaction.type === 'EXPENSE' ? (
+                                  <TrendingDown className="h-4 w-4 text-red-600" />
+                                ) : (
+                                  <Activity className="h-4 w-4 text-blue-600" />
+                                )}
+                              </div>
+                              <div>
+                                <p className="font-medium text-gray-900">
+                                  {transaction.description}
+                                </p>
+                                <p className="text-xs text-gray-500">
+                                  {transaction.category?.name || 'Sin categoría'}
+                                </p>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="py-4 text-sm text-gray-600">
+                            {transaction.account?.name || 'N/A'}
+                          </td>
+                          <td className={`py-4 text-right font-bold ${
+                            transaction.type === 'INCOME' 
+                              ? 'text-green-600' 
+                              : transaction.type === 'EXPENSE'
+                              ? 'text-red-600'
+                              : 'text-gray-900'
+                          }`}>
+                            {transaction.type === 'EXPENSE' ? '-' : '+'}
+                            {formatCurrency(Math.abs(transaction.amount))}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </main>
