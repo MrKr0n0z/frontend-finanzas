@@ -12,34 +12,34 @@ export default function LoginPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    setError('');
-    setLoading(true);
+const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
+  e.preventDefault();
+  setError('');
+  setLoading(true);
 
-    try {
-      const response = await authService.login(email, password);
-      
-      // Guardar token en cookie (ya se guarda en el servicio, pero por seguridad)
-      setCookie('auth_token', response.token, {
-        maxAge: 60 * 60 * 24 * 7, // 7 días
-        path: '/',
-        sameSite: 'lax',
-        secure: process.env.NODE_ENV === 'production',
-      });
-
-      // Redirigir al dashboard
-      router.push('/dashboard');
-    } catch (err: any) {
-      console.error('Error en login:', err);
-      setError(
-        err.response?.data?.message || 
-        'Error al iniciar sesión. Verifica tus credenciales.'
-      );
-    } finally {
-      setLoading(false);
-    }
-  };
+  try {
+    const response = await authService.login(email, password);
+    
+    // Guardar el token en las cookies
+    setCookie('auth_token', response.token, {
+      maxAge: 60 * 60 * 24 * 7, // 7 días
+      path: '/',
+    });
+    
+    console.log('Login exitoso:', response.user);
+    
+    // Redirigir al dashboard
+    router.push('/dashboard');
+  } catch (err: any) {
+    console.error('Error en login:', err);
+    setError(
+      err.response?.data?.message || 
+      'Error al iniciar sesión. Verifica tus credenciales.'
+    );
+  } finally {
+    setLoading(false);
+  }
+};
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-indigo-50 via-white to-blue-50 px-4">

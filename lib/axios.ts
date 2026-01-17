@@ -1,47 +1,54 @@
 import axios from 'axios';
 import { getCookie } from 'cookies-next';
 
-// Crear instancia de Axios configurada
-const axiosInstance = axios.create({
-  baseURL: 'http://localhost:8000/api',
+// Instancia base para rutas SIN /api
+export const baseAxios = axios.create({
+  baseURL: 'http://127.0.0.1',
   withCredentials: true,
   headers: {
-    Accept: 'application/json',
     'Content-Type': 'application/json',
+    'Accept': 'application/json',
   },
 });
 
-// Interceptor de solicitud: inyectar token si existe
-axiosInstance.interceptors.request.use(
-  (config) => {
-    const token = getCookie('auth_token');
-    
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
-    }
-    
-    return config;
+// Instancia principal para rutas CON /api
+const axiosInstance = axios.create({
+  baseURL: 'http://127.0.0.1/api',
+  withCredentials: true,
+  headers: {
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
   },
-  (error) => {
-    return Promise.reject(error);
-  }
-);
+});
 
-// Interceptor de respuesta: manejo de errores global (opcional)
+// Interceptor para agregar tokens
+axiosInstance.interceptors.request.use((config) => {
+  // Agregar el token de autenticación Bearer
+  const authToken = getCookie('auth_token');
+  if (authToken) {
+    config.headers['Authorization'] = `Bearer ${authToken}`;
+  }
+  
+  // Extraer el XSRF token de las cookies
+  const xsrfToken = document.cookie
+    .split('; ')
+    .find(row => row.startsWith('XSRF-TOKEN='))
+    ?.split('=')[1];
+  
+  if (xsrfToken) {
+    config.headers['X-XSRF-TOKEN'] = decodeURIComponent(xsrfToken);
+  }
+  
+  return config;
+});
+
+// Interceptor de respuesta
 axiosInstance.interceptors.response.use(
   (response) => response,
   (error) => {
-    // Aquí puedes manejar errores globales, por ejemplo:
-    // - 401: redirigir a login
-    // - 403: mostrar error de permisos
-    // - 500: mostrar error del servidor
-    
     if (error.response?.status === 401) {
-      // Token expirado o no autorizado
-      // Podrías limpiar cookies y redirigir a login
-      console.error('No autorizado - Token inválido o expirado');
+      console.error('Sesión expirada o no autorizado');
     }
-    
     return Promise.reject(error);
   }
 );

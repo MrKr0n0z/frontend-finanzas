@@ -14,12 +14,12 @@ export default function DashboardPage() {
 
   // Cálculos financieros
   const totalLiquidez = accounts
-    .filter(account => account.type === 'LIQUID')
-    .reduce((sum, account) => sum + account.current_balance, 0);
+    ?.filter(account => account.type === 'LIQUID')
+    .reduce((sum, account) => sum + account.current_balance, 0) || 0;
 
   const totalDeuda = accounts
-    .filter(account => account.type === 'CREDIT')
-    .reduce((sum, account) => sum + account.current_balance, 0);
+    ?.filter(account => account.type === 'CREDIT')
+    .reduce((sum, account) => sum + account.current_balance, 0) || 0;
 
   const patrimonio = totalLiquidez + totalDeuda;
 
@@ -51,18 +51,23 @@ export default function DashboardPage() {
 
     const loadData = async () => {
       try {
-        const [accountsData, transactionsData] = await Promise.all([
-          financesService.getAccounts(),
-          financesService.getTransactions({ per_page: 10 }),
-        ]);
+        // Cargar cuentas
+        try {
+          const accountsData = await financesService.getAccounts();
+          setAccounts(accountsData);
+        } catch (error) {
+          console.error('Error al cargar cuentas:', error);
+          setAccounts([]);
+        }
 
-        setAccounts(accountsData);
-        setTransactions(transactionsData);
-      } catch (error) {
-        console.error('Error al cargar datos:', error);
-        // Si el token es inválido, redirigir al login
-        deleteCookie('auth_token');
-        router.push('/');
+        // Cargar transacciones
+        try {
+          const transactionsData = await financesService.getTransactions({ per_page: 10 });
+          setTransactions(transactionsData);
+        } catch (error) {
+          console.error('Error al cargar transacciones:', error);
+          setTransactions([]);
+        }
       } finally {
         setLoading(false);
       }
@@ -224,7 +229,7 @@ export default function DashboardPage() {
               </h2>
             </div>
 
-            {transactions.length === 0 ? (
+            {!transactions || transactions.length === 0 ? (
               <div className="px-6 py-12 text-center">
                 <svg
                   className="mx-auto h-12 w-12 text-gray-400"
