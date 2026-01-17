@@ -154,24 +154,40 @@ export default function DashboardPage() {
         setLoading(true);
         setError(null);
 
-        // Cargar datos simultáneamente con Promise.all
-        const [accountsResponse, transactionsResponse] = await Promise.all([
-          axiosInstance.get<{ data: Account[] }>('/accounts'),
-          axiosInstance.get<{ data: Transaction[] }>('/transactions', {
-            params: { per_page: 50 } // Traer más para el gráfico
-          })
-        ]);
+        // Cargar cuentas
+        try {
+          const accountsResponse = await axiosInstance.get<{ accounts: Account[] }>('/accounts');
+          setAccounts(accountsResponse.data.accounts || []);
+        } catch (err: any) {
+          console.error('Error al cargar cuentas:', err);
+          console.error('Detalles:', err.response?.data);
+          setAccounts([]);
+          
+          // Si es error 401, redirigir al login
+          if (err.response?.status === 401) {
+            deleteCookie('auth_token');
+            router.push('/');
+            return;
+          }
+        }
 
-        setAccounts(accountsResponse.data.data || []);
-        setTransactions(transactionsResponse.data.data || []);
-      } catch (err: any) {
-        console.error('Error al cargar datos:', err);
-        setError('Error al cargar los datos del dashboard');
-        
-        // Si es error 401, redirigir al login
-        if (err.response?.status === 401) {
-          deleteCookie('auth_token');
-          router.push('/');
+        // Cargar transacciones
+        try {
+          const transactionsResponse = await axiosInstance.get<{ transactions: Transaction[] }>('/transactions', {
+            params: { per_page: 50 }
+          });
+          setTransactions(transactionsResponse.data.transactions || []);
+        } catch (err: any) {
+          console.error('Error al cargar transacciones:', err);
+          console.error('Detalles:', err.response?.data);
+          setTransactions([]);
+          
+          // Si es error 401, redirigir al login
+          if (err.response?.status === 401) {
+            deleteCookie('auth_token');
+            router.push('/');
+            return;
+          }
         }
       } finally {
         setLoading(false);
